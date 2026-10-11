@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Garden Escape: Real-Time Online Multiplayer</title>
+<style>
+:root{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#132917;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#fff}
+#app{position:fixed;inset:0}canvas{display:block}
+.glass{background:rgba(15,45,25,.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.25);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+#hud{position:absolute;left:0;right:0;top:0;padding:calc(8px + env(safe-area-inset-top,0px)) 12px 0;pointer-events:none;text-align:center;font-size:13px;z-index:2}
+#hud b{letter-spacing:.08em}
+.chips{display:flex;gap:8px;justify-content:center;margin-top:6px;flex-wrap:wrap}
+.chips span{padding:3px 10px;border-radius:99px;background:rgba(0,0,0,.65);border:2px solid;font-weight:600}
+#player-ui{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);width:90%;max-width:480px;z-index:3;pointer-events:auto}
+.pan{padding:12px 16px;font-size:13px;pointer-events:auto;max-height:80vh;overflow:auto}
+.pan .q{font-weight:700;font-size:15px;margin-bottom:8px;line-height:1.4}
+.pan button{display:block;width:100%;text-align:left;margin:5px 0;padding:8px 12px;font:inherit;color:#fff;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:8px;cursor:pointer;transition:all .2s}
+.pan button:hover{background:rgba(255,255,255,.28);transform:translateY(-1px)}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+.pad button{text-align:center;margin:0;font-size:11px;font-weight:700;padding:10px 4px}
+.ok{color:#8dff9c;font-weight:800;font-size:14px;margin-bottom:6px}.bad{color:#ff9b9b;font-weight:800;font-size:14px;margin-bottom:6px}
+#big{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none;text-shadow:0 2px 12px #000;white-space:pre-line;z-index:4}
+.ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,30,15,.8);z-index:5}
+.ov .box{padding:26px 30px;text-align:center;max-width:440px;width:85%}
+.go{margin-top:16px;padding:12px 26px;font:inherit;font-size:15px;font-weight:700;border:0;border-radius:99px;background:#5ed36a;color:#0b2a12;cursor:pointer;transition:transform .2s}
+.go:hover{transform:scale(1.04)}
+.role-btn{display:block;width:100%;padding:10px 14px;margin:8px 0;border-radius:10px;border:2px solid;font-size:14px;font-weight:700;background:rgba(0,0,0,.4);color:#fff;cursor:pointer;text-align:left}
+input[type="text"]{width:80%;padding:8px 12px;margin:8px 0;border-radius:6px;border:1px solid #ccc;font-size:14px;text-align:center}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud"></div>
+<div id="player-ui"></div>
+<div id="big"></div>
+
+<div id="intro" class="ov">
+  <div class="box glass">
+    <div style="font-size:28px;font-weight:800">🌿 GARDEN ESCAPE</div>
+    <p style="font-size:13px;opacity:.9;margin:8px 0 12px">Online Multiplayer Mode</p>
+
+    <div id="room-setup">
+      <p style="font-size:12px;">Enter Room Code:</p>
+      <input type="text" id="room-code-input" value="GARDEN123" placeholder="Room Code">
+      <div style="font-size:12px;opacity:.8;margin-bottom:12px">Ensure all 5 laptops use the exact same Room Code!</div>
+      
+      <p style="font-size:13px;font-weight:700">Select Your Role:</p>
+      <button class="role-btn" style="border-color:#4be36a" onclick="selectRole(0)">HR (Green — Top-Left)</button>
+      <button class="role-btn" style="border-color:#6fa0ff" onclick="selectRole(1)">MARKETING (Blue — Top-Right)</button>
+      <button class="role-btn" style="border-color:#ffd93b" onclick="selectRole(2)">FINANCE (Yellow — Bottom-Left)</button>
+      <button class="role-btn" style="border-color:#ff7378" onclick="selectRole(3)">OPERATIONS (Red — Bottom-Right)</button>
+      <button class="role-btn" style="border-color:#ffffff;background:rgba(255,255,255,.15)" onclick="selectRole('admin')">👑 ADMIN / HOST SPECTATOR</button>
+    </div>
+
+    <div id="admin-controls" style="display:none;margin-top:14px">
+      <p style="font-size:12px;color:#8dff9c" id="admin-status">Connected to network. Waiting for player connections...</p>
+      <button class="go" onclick="adminStartGame()">START GAME FOR ALL PLAYERS</button>
+    </div>
+
+    <div id="waiting-msg" style="display:none;margin-top:14px;font-size:13px;color:#ffd93b">
+      Connecting to Admin room... <br><small style="color:#aaa">Waiting for Admin to click Start Game.</small>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+<script>
+const N=11,CS=4,C=5,H=2.7,T=.8,DIRS=[[0,-1],[1,0],[0,1],[-1,0]],OFF={F:0,R:1,B:2,L:3},LBL={F:'⬆ FORWARD',R:'➡ RIGHT',B:'⬇ BACK',L:'⬅ LEFT'};
+const ROLES=[
+  {n:'HR',c:0x2fb344,s:'#4be36a'},
+  {n:'MARKETING',c:0x2f6bea,s:'#6fa0ff'},
+  {n:'FINANCE',c:0xe8c21a,s:'#ffd93b'},
+  {n:'OPERATIONS',c:0xe5484d,s:'#ff7378'}
+];
+
+const Q=[
+[["What is recruitment?","Finding and hiring employees","Managing accounts","Advertising","Storing stock"],["What is onboarding?","Integrating new hires","Firing staff","Auditing books","Shipping goods"],["A job description lists...","Duties and requirements","Sales targets","Tax rates","Stock levels"],["Payroll handles...","Employee salaries","Ad campaigns","Suppliers","Web traffic"],["An appraisal reviews...","Employee performance","Company profit","Website rank","Inventory"]],
+[["What is SEO?","Improving search ranking","Storing invoices","Hiring staff","Packing goods"],["A target audience is...","Customers you aim to reach","Company auditors","Suppliers","Board members"],["Branding builds...","Identity and recognition","Payroll","Stock counts","Tax filings"],["CTR measures...","Clicks per impression","Cash flow","Staff turnover","Delivery time"],["Market research gathers...","Customer and market data","Salaries","Loans","Machines"]],
+[["What is an asset?","Something of value owned","A company debt","An ad slogan","A hiring test"],["A liability is...","An amount owed","Owned cash","A sales lead","A job role"],["Profit equals...","Revenue minus costs","Costs plus tax","Assets plus debt","Sales only"],["A balance sheet shows...","Assets, liabilities, equity","Ad reach","Staff list","Delivery routes"],["Budgeting means...","Planning income and spending","Recruiting","Branding","Shipping"]],
+[["What is inventory?","Goods held for sale or use","Staff records","Ad budget","Tax refund"],["A supply chain moves...","Goods from source to customer","Only money","Job offers","Web pages"],["Quality control checks...","Product standards","Salaries","Ad clicks","Loans"],["Logistics is about...","Transport and storage","Hiring","Branding","Accounting"],["Lean operations aim to...","Reduce waste","Raise debt","Add ads","Hire more"]]];
+
+let scene,ren,ov,cams,players,phase='menu',round=0,open,mazeG,ovlG,last=0,tt=0,snap,orb=0,winner=null;
+let myRole=null; 
+let peer=null, hostConn=null, playerConns=[];
+
+const cp=(x,y)=>new THREE.Vector3((x-(N-1)/2)*CS,0,(y-(N-1)/2)*CS);
+
+function tex(base,cols,n,rep){
+  const c=document.createElement('canvas');c.width=c.height=128;const x=c.getContext('2d');
+  x.fillStyle=base;x.fillRect(0,0,128,128);x.globalAlpha=.6;
+  for(let i=0;i<n;i++){x.fillStyle=cols[i%cols.length];x.beginPath();x.arc(Math.random()*128,Math.random()*128,1+Math.random()*4,0,7);x.fill()}
+  const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(rep,rep);return t
+}
+
+function label(txt,col){
+  const c=document.createElement('canvas');c.width=256;c.height=64;const x=c.getContext('2d');
+  x.font='bold 38px sans-serif';x.textAlign='center';x.fillStyle='rgba(0,0,0,.55)';x.fillRect(0,4,256,56);x.fillStyle=col;x.fillText(txt,128,46);
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false}));s.scale.set(10,2.5,1);return s
+}
+
+function gen(){
+  open=[...Array(N)].map(()=>[...Array(N)].map(()=>[0,0,0,0]));const vis=new Set(['0,0']),st=[[0,0]];
+  while(st.length){
+    const[x,y]=st[st.length-1];
+    const nb=[0,1,2,3].filter(d=>{const a=x+DIRS[d][0],b=y+DIRS[d][1];return a>=0&&b>=0&&a<N&&b<N&&!vis.has(a+','+b)});
+    if(!nb.length){st.pop();continue}
+    const d=nb[Math.random()*nb.length|0],a=x+DIRS[d][0],b=y+DIRS[d][1];
+    open[y][x][d]=1;open[b][a][(d+2)%4]=1;vis.add(a+','+b);st.push([a,b])
+  }
+  for(let k=0;k<14;k++){
+    const x=Math.random()*(N-1)|0,y=Math.random()*(N-1)|0,d=1+(Math.random()<.5?0:1),a=x+DIRS[d][0],b=y+DIRS[d][1];
+    open[y][x][d]=1;open[b][a][(d+2)%4]=1
+  }
+}
+
+function buildMaze(){
+  if(mazeG)scene.remove(mazeG);mazeG=new THREE.Group();const W=[];
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const p=cp(x,y);
+    if(!open[y][x][0])W.push([p.x,p.z-CS/2,1]);
+    if(!open[y][x][3])W.push([p.x-CS/2,p.z,0]);
+    if(y==N-1)W.push([p.x,p.z+CS/2,1]);
+    if(x==N-1)W.push([p.x+CS/2,p.z,0])
+  }
+  const hm=new THREE.MeshStandardMaterial({map:tex('#1f5a1f',['#2f7a2a','#154515','#3d8f35'],420,1.5),roughness:1});
+  const walls=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),hm,W.length),blobs=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.6,1),hm,W.length*5),m=new THREE.Matrix4(),col=new THREE.Color();let b=0;
+  W.forEach(([x,z,h],i)=>{
+    const hh=H*(.92+Math.random()*.2);m.compose(new THREE.Vector3(x,hh/2,z),new THREE.Quaternion(),new THREE.Vector3(h?CS+T:T,hh,h?T:CS+T));
+    walls.setMatrixAt(i,m);walls.setColorAt(i,col.setRGB(.8+Math.random()*.3,.9+Math.random()*.2,.8+Math.random()*.2));
+    for(let k=0;k<5;k++){
+      const o=(k-2)*CS/4.5,s=.8+Math.random()*.5;
+      m.compose(new THREE.Vector3(x+(h?o:0),hh+.05,z+(h?0:o)),new THREE.Quaternion(),new THREE.Vector3(s*1.3,s*.7,s*1.3));
+      blobs.setMatrixAt(b,m);blobs.setColorAt(b++,col.setRGB(.8+Math.random()*.4,.9+Math.random()*.2,.8));
+    }
+  });
+  walls.castShadow=walls.receiveShadow=blobs.castShadow=true;mazeG.add(walls,blobs);scene.add(mazeG);ren.shadowMap.needsUpdate=true
+}
+
+function build(){
+  scene=new THREE.Scene();scene.background=new THREE.Color(0x9fd0f2);scene.fog=new THREE.FogExp2(0xbfe0f5,.011);
+  scene.add(new THREE.HemisphereLight(0xcfe8ff,0x4a6b34,.75));
+  const sun=new THREE.DirectionalLight(0xfff1cf,1.1);sun.position.set(30,60,25);sun.castShadow=true;
+  sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-38,right:38,top:38,bottom:-38,near:1,far:150});scene.add(sun);
+  
+  const gr=new THREE.Mesh(new THREE.PlaneGeometry(400,400),new THREE.MeshStandardMaterial({map:tex('#4a8a34',['#5fa543','#3d7a2b','#6bb04c'],900,70),roughness:1}));gr.rotation.x=-Math.PI/2;gr.receiveShadow=true;scene.add(gr);
+  const so=new THREE.Mesh(new THREE.PlaneGeometry(N*CS+1,N*CS+1),new THREE.MeshStandardMaterial({map:tex('#8a6a45',['#a68560','#6e5230','#b8a27c'],500,12),roughness:1}));so.rotation.x=-Math.PI/2;so.position.y=.02;so.receiveShadow=true;scene.add(so);
+  
+  const fin=new THREE.Group(),cl=new THREE.Mesh(new THREE.CircleGeometry(1.9,32),new THREE.MeshStandardMaterial({color:0xd9cfa8}));cl.rotation.x=-Math.PI/2;cl.position.y=.04;fin.add(cl);
+  const pole=new THREE.Mesh(new THREE.CylinderGeometry(.06,.06,3,8),new THREE.MeshStandardMaterial({color:0xeeeeee}));pole.position.y=1.5;
+  const fg=new THREE.Mesh(new THREE.PlaneGeometry(1.1,.7),new THREE.MeshStandardMaterial({color:0xd62828,side:2}));fg.position.set(.55,2.6,0);
+  const cup=new THREE.Mesh(new THREE.SphereGeometry(.4,16,12),new THREE.MeshStandardMaterial({color:0xffc933,metalness:.8,roughness:.25,emissive:0x664400}));cup.position.set(0,3.2,0);
+  fin.add(pole,fg,cup);const pl=new THREE.PointLight(0xffd36b,1.2,12);pl.position.y=2.5;fin.add(pl);scene.add(fin);fin.userData.cup=cup;window.fin=fin;
+  
+  ovlG=new THREE.Group();scene.add(ovlG);
+  const bm=(c)=>new THREE.Mesh(new THREE.CylinderGeometry(.3,.3,30,8),new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:.45}));
+  const fb=bm(0xffc933);fb.position.y=15;ovlG.add(fb);const fl2=label('🏁 FINISH','#ffd93b');fl2.position.set(0,33,0);ovlG.add(fl2);
+  
+  const starts=[[0,0],[N-1,0],[0,N-1],[N-1,N-1]];window.starts=starts;
+  
+  players=ROLES.map((r,i)=>{
+    const g=new THREE.Group(),mt=new THREE.MeshStandardMaterial({color:r.c,emissive:r.c,emissiveIntensity:.35});
+    const bd=new THREE.Mesh(new THREE.CylinderGeometry(.28,.34,1.2,10),mt);bd.position.y=.6;
+    const hd=new THREE.Mesh(new THREE.SphereGeometry(.26,12,10),mt);hd.position.y=1.45;g.add(bd,hd);scene.add(g);
+    const b=bm(r.c);b.position.copy(cp(...starts[i]));b.position.y=15;ovlG.add(b);
+    const lb=label('START '+r.n,r.s);lb.position.copy(cp(...starts[i]));lb.position.y=32;ovlG.add(lb);
+    return{i,mesh:g};
+  });
+  ren.shadowMap.autoUpdate=false;
+}
+
+function resetPlayers(){
+  players.forEach((p,i)=>{
+    p.cell=[...starts[i]];p.pos=cp(...p.cell);
+    p.h=[0,1,2,3].find(d=>open[p.cell[1]][p.cell[0]][d]);
+    p.yaw=-p.h*Math.PI/2;p.ly=p.yaw;p.queue=[];p.score=0;p.steps=0;p.bob=0;p.st='idle';p.walking=false
+  });
+}
+
+function selectRole(r){
+  myRole=r;
+  const roomCode = document.getElementById('room-code-input').value.trim() || "GARDEN123";
+  document.getElementById('room-setup').style.display='none';
+
+  if(r==='admin'){
+    document.getElementById('admin-controls').style.display='block';
+    peer = new Peer('garden-escape-room-' + roomCode);
+    
+    peer.on('open', (id) => {
+      document.getElementById('admin-status').innerText = "Admin Room Created! Waiting for players to join...";
+    });
+
+    peer.on('connection', (conn) => {
+      playerConns.push(conn);
+      document.getElementById('admin-status').innerText = `Players connected: ${playerConns.length}/4`;
+      conn.on('data', (data) => {
+        if(data.type==='PLAYER_MOVE'){
+          plan(players[data.playerIdx], data.pick);
+        }
+      });
+    });
+
+    peer.on('error', (err) => {
+      if(err.type === 'unavailable-id') {
+        alert('Room ID already exists! Please use a different room code.');
+        location.reload();
+      }
+    });
+
+  } else {
+    document.getElementById('waiting-msg').style.display='block';
+    peer = new Peer();
+    peer.on('open', () => {
+      hostConn = peer.connect('garden-escape-room-' + roomCode);
+      hostConn.on('open', () => {
+        document.getElementById('waiting-msg').innerHTML = `<b style="color:#8dff9c">Connected to Admin Room!</b><br>Waiting for Admin to click Start Game...`;
+      });
+      hostConn.on('data', (data) => {
+        if(data.type==='START_GAME'){
+          startGame();
+        }
+      });
+    });
+  }
+}
+
+function adminStartGame(){
+  playerConns.forEach(conn => conn.send({type:'START_GAME'}));
+  startGame();
+}
+
+function startGame(){
+  document.getElementById('intro').style.display='none';
+  restart();
+}
+
+function restart(){
+  gen();buildMaze();resetPlayers();winner=null;round=0;phase='study';timer=20;ovlG.visible=true;
+  big.innerHTML='';hud();
+}
+
+function hud(){
+  const h=document.getElementById('hud');
+  if(phase=='study'||phase=='trans'){
+    h.innerHTML='<b>🌿 GARDEN ESCAPE</b> — study the maze corners and center route';
+    return;
+  }
+  h.innerHTML=`<b>🌿 GARDEN ESCAPE</b> · ${myRole==='admin'?'👑 ADMIN SPECTATOR VIEW':'ROLE: '+ROLES[myRole].n}<div class="chips">${players.map((p,i)=>`<span style="border-color:${ROLES[i].s}">${ROLES[i].n}${p.score}</span>`).join('')}</div>`;
+}
+
+function tyaw(p,h){const b=-h*Math.PI/2;p.ly=b+2*Math.PI*Math.round((p.ly-b)/(2*Math.PI));return p.ly}
+
+function plan(p,r){
+  let h=(p.h+OFF[r])%4,[x,y]=p.cell;p.ly=p.yaw;if(p.queue.length)p.ly=p.queue[p.queue.length-1].y||p.ly;
+  for(let n=0;n<40;n++){
+    p.queue.push({t:'turn',y:tyaw(p,h)});x+=DIRS[h][0];y+=DIRS[h][1];
+    p.queue.push({t:'walk',to:cp(x,y)});p.steps++;
+    if(x==C&&y==C)break;
+    const ops=[0,1,2,3].filter(d=>open[y][x][d]);
+    if(ops.length!=2)break;
+    h=ops.find(d=>d!=(h+2)%4)
+  }
+  p.cell=[x,y];p.h=h;
+}
+
+function valid(p){return['F','R','B','L'].filter(r=>open[p.cell[1]][p.cell[0]][(p.h+OFF[r])%4])}
+
+function draw(){
+  const pUI=document.getElementById('player-ui');
+  if(myRole==='admin'){ pUI.innerHTML=''; return; }
+  const p=players[myRole];let s='';
+  
+  if(p.st=='ask'){
+    s=`<div class="q">${p.q.t}</div>`+p.q.opts.map((o,k)=>`<button onclick="ans(${k})">${'ABCD'[k]}. ${o.t}</button>`).join('');
+  } else if(p.st=='ok'){
+    const v=valid(p),bt=r=>v.includes(r)?`<button onclick="dir('${r}')">${LBL[r]}</button>`:'<span></span>';
+    s=`<div class="ok">✓ CORRECT! Choose next direction</div><div class="pad"><span></span>${bt('F')}<span></span>${bt('L')}<span></span>${bt('R')}<span></span>${bt('B')}<span></span></div>`;
+  } else if(p.st=='bad'){
+    s='<div class="bad">✕ WRONG — Try again next turn</div><button onclick="nextQuestion()">Next Question</button>';
+  } else if(p.st=='go'){
+    s=`<div class="ok">Moving ${p.pick}…</div>`;
+  }
+  pUI.innerHTML=s?'<div class="pan glass">'+s+'</div>':'';
+}
+
+function nextQuestion(){
+  const p=players[myRole];
+  const b=Q[myRole],q=b[Math.random()*b.length|0];
+  p.q={t:q[0],opts:[1,2,3,4].map((k,j)=>({t:q[k],ok:j==0})).sort(()=>Math.random()-.5)};
+  p.st='ask';draw();
+}
+
+function ans(k){
+  const p=players[myRole];
+  if(p.st!='ask')return;
+  if(p.q.opts[k].ok){p.st='ok';p.score+=10}else p.st='bad';
+  draw();hud();
+}
+
+function dir(r){
+  const p=players[myRole];
+  if(p.st!='ok')return;
+  p.st='go';p.pick=r;
+  plan(p,r);
+  
+  if(hostConn) {
+    hostConn.send({type:'PLAYER_MOVE', playerIdx: myRole, pick: r});
+  }
+  
+  draw();
+  setTimeout(()=>{ if(!chkWin()) nextQuestion(); }, 1800);
+}
+
+function chkWin(){
+  const p=players[myRole];
+  if(p.cell[0]==C && p.cell[1]==C){
+    winner=p;phase='win';
+    ovlG.visible=true;
+    const o=document.createElement('div');o.className='ov';
+    o.innerHTML=`<div class="box glass"><div style="font-size:34px">🏆 WINNER!</div><div style="font-size:22px;font-weight:800;color:${ROLES[myRole].s}">${ROLES[myRole].n} Team</div><button class="go" id="rs">Play again</button></div>`;
+    document.body.appendChild(o);
+    document.getElementById('rs').onclick=()=>{o.remove();restart()};
+    return true;
+  }
+  return false;
+}
+
+function anim(p,dt){
+  const s=p.queue[0];if(!s){p.walking=false;return}
+  if(s.t=='turn'){
+    const d=s.y-p.yaw,st=dt*2.8;
+    if(Math.abs(d)<=st){p.yaw=s.y;p.queue.shift()}else p.yaw+=Math.sign(d)*st;p.walking=false
+  } else {
+    p.walking=true;const v=s.to.clone().sub(p.pos),l=v.length(),st=dt*3.6;
+    if(l<=st){p.pos.copy(s.to);p.queue.shift()}else p.pos.add(v.multiplyScalar(st/l))
+  }
+  if(p.walking)p.bob+=dt*9
+}
+
+function update(dt){
+  fin.userData.cup.rotation.y+=dt;
+  if(phase=='study'){
+    timer-=dt;orb+=dt*.12;
+    big.innerHTML=`<div style="position:absolute;top:70px" class="glass"><div style="padding:6px 16px;font-size:14px">STUDY THE MAZE · <b style="font-size:22px">${Math.max(0,Math.ceil(timer))}</b></div></div>`;
+    if(timer<=0){
+      phase='game';big.innerHTML='';ovlG.visible=(myRole==='admin');hud();
+      if(myRole!=='admin') nextQuestion();
+    }
+  } else {
+    players.forEach(p=>anim(p,dt));
+  }
+  players.forEach(p=>{p.mesh.position.copy(p.pos);p.mesh.rotation.y=p.yaw})
+}
+
+function render(){
+  const W=innerWidth,Hh=innerHeight;
+  ren.setViewport(0,0,W,Hh);ren.setScissor(0,0,W,Hh);ren.setScissorTest(true);
+  
+  if(phase==='study' || myRole==='admin'){
+    ov.position.set(Math.sin(orb)*52,58,Math.cos(orb)*52);ov.lookAt(0,0,0);
+    ov.aspect=W/Hh;ov.updateProjectionMatrix();
+    players.forEach(p=>p.mesh.visible=true);
+    ren.render(scene,ov);
+  } else {
+    const p=players[myRole], c=cams[myRole];
+    c.aspect=W/Hh;c.updateProjectionMatrix();
+    c.position.set(p.pos.x,1.7+Math.sin(p.bob)*.05,p.pos.z);
+    c.rotation.set(0,p.yaw,0);
+    players.forEach(o=>o.mesh.visible=o!==p);
+    ren.render(scene,c);
+  }
+}
+
+function frame(t){
+  requestAnimationFrame(frame);
+  const dt=Math.min(.05,(t-last)/1000||0);last=t;
+  if(phase!='menu')update(dt);
+  render();
+}
+
+ren=new THREE.WebGLRenderer({antialias:true});ren.setPixelRatio(Math.min(devicePixelRatio,1.5));ren.shadowMap.enabled=true;ren.setSize(innerWidth,innerHeight);
+document.getElementById('app').appendChild(ren.domElement);
+addEventListener('resize',()=>ren.setSize(innerWidth,innerHeight));
+
+ov=new THREE.PerspectiveCamera(50,1,.5,600);
+build();
+cams=ROLES.map(()=>{const c=new THREE.PerspectiveCamera(72,1,.1,120);c.rotation.order='YXZ';return c});
+gen();buildMaze();resetPlayers();ov.position.set(0,58,52);ov.lookAt(0,0,0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
